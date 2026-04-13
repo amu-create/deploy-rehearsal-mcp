@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Deploy Rehearsal — AI가 만든 코드를 배포 전에 검역하세요</title>
+  <meta name="description" content="PR에서 새로 생긴 배포 위험만 골라내고, suppress 상태와 예외 사유까지 함께 보여줍니다. Next.js 배포 실수에 특히 강한 CI 안전 레이어." />
+
+  <!-- Tailwind via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', '"Pretendard"', 'system-ui', 'sans-serif'],
+            mono: ['ui-monospace', '"Cascadia Mono"', 'Menlo', 'Consolas', 'monospace'],
+          },
+          colors: {
+            brand: { 500: '#f97316', 400: '#fb923c' },
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- marked for client-side markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
+
+  <style>
+    html { scroll-behavior: smooth; }
+    body { font-feature-settings: "cv02","cv03","cv04","cv11"; }
+
+    /* GitHub-style PR comment container */
+    .pr-comment {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.55;
+      color: #e2e8f0;
+    }
+    .pr-comment h1 { font-size: 1.35rem; font-weight: 600; margin: 1.25rem 0 0.5rem; border-bottom: 1px solid #334155; padding-bottom: 0.25rem; }
+    .pr-comment h2 { font-size: 1.05rem; font-weight: 600; margin: 1.25rem 0 0.5rem; border-bottom: 1px solid #334155; padding-bottom: 0.25rem; }
+    .pr-comment h3 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.4rem; color: #cbd5e1; }
+    .pr-comment p { margin: 0.5rem 0; }
+    .pr-comment ul { list-style: disc; padding-left: 1.4rem; margin: 0.4rem 0; }
+    .pr-comment ul ul { list-style: circle; margin: 0.25rem 0; }
+    .pr-comment li { margin: 0.2rem 0; }
+    .pr-comment code {
+      font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+      font-size: 0.85em;
+      background: #0f172a;
+      color: #fdba74;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+      border: 1px solid #1e293b;
+    }
+    .pr-comment blockquote {
+      border-left: 4px solid #f97316;
+      padding: 0.35rem 0.9rem;
+      color: #cbd5e1;
+      background: rgba(249, 115, 22, 0.06);
+      margin: 0.75rem 0;
+      border-radius: 0 6px 6px 0;
+    }
+    .pr-comment em { color: #94a3b8; font-style: normal; }
+    .pr-comment strong { color: #f1f5f9; }
+    .pr-comment hr { border: 0; border-top: 1px solid #334155; margin: 1rem 0; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased">
+  <!-- ═════════════════════════════════════════════════════════════════════
+       Nav
+  ═════════════════════════════════════════════════════════════════════ -->
+  <header class="sticky top-0 z-50 border-b border-slate-900 bg-slate-950/80 backdrop-blur">
+    <div class="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
+      <a href="#hero" class="flex items-center gap-2 text-sm font-semibold">
+        <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-brand-500 text-[11px] font-bold text-white">DR</span>
+        Deploy&nbsp;Rehearsal
+      </a>
+      <nav class="hidden gap-6 text-sm text-slate-400 md:flex">
+        <a href="#how" class="hover:text-white">How it works</a>
+        <a href="#comment" class="hover:text-white">PR 코멘트 예시</a>
+        <a href="#rules" class="hover:text-white">실전 사례</a>
+        <a href="#pricing" class="hover:text-white">요금제</a>
+        <a href="#start" class="hover:text-white">5분 시작</a>
+      </nav>
+      <a href="#start" class="inline-flex items-center rounded-md bg-brand-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-400">
+        GitHub Action 시작
+      </a>
+    </div>
+  </header>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       1. Hero
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section id="hero" class="relative overflow-hidden border-b border-slate-900">
+    <div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-brand-500/10 via-transparent to-transparent"></div>
+    <div class="relative mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8 lg:py-28">
+      <div class="grid items-start gap-12 lg:grid-cols-2">
+        <!-- left: copy -->
+        <div>
+          <div class="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/60 px-3 py-1 text-xs text-slate-400">
+            <span class="h-1.5 w-1.5 rounded-full bg-brand-500"></span>
+            PR 안전장치 · AI 코딩 시대의 배포 전 검역
+          </div>
+          <h1 class="text-4xl font-bold leading-tight sm:text-5xl lg:text-6xl">
+            AI가 만든 코드를<br />
+            <span class="text-brand-400">배포 전에 검역</span>하세요
+          </h1>
+          <p class="mt-6 max-w-xl text-lg leading-relaxed text-slate-300">
+            PR에서 새로 생긴 배포 위험만 골라내고, suppress 상태와 예외 사유까지 함께 보여줍니다.
+            <span class="text-white">Server Actions 혼선, 무시되는 revalidate, 빠진 standalone output</span> 같은 Next.js 실수에 특히 강합니다.
+          </p>
+          <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+            <a href="#start" class="inline-flex items-center justify-center rounded-md bg-brand-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 hover:bg-brand-400">
+              GitHub Action으로 5분 안에 시작하기
+              <span class="ml-2">→</span>
+            </a>
+            <a href="#comment" class="inline-flex items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 px-5 py-3 text-sm font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-900">
+              PR 코멘트 예시 보기
+            </a>
+          </div>
+          <p class="mt-6 max-w-xl text-sm leading-relaxed text-slate-400">
+            정적 분석기를 하나 더 추가하는 게 아닙니다.
+            <span class="text-slate-200">머지 직전, 실제로 배포를 망가뜨릴 변경을 다시 검사하는 PR 안전장치</span>입니다.
+          </p>
+        </div>
+
+        <!-- right: BLOCK comment preview -->
+        <div class="relative">
+          <div class="absolute -inset-4 rounded-2xl bg-rose-500/10 blur-2xl"></div>
+          <div class="relative overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-2xl">
+            <div class="flex items-center gap-2 border-b border-slate-800 bg-slate-950 px-4 py-2.5">
+              <span class="flex gap-1.5">
+                <span class="h-2.5 w-2.5 rounded-full bg-rose-500/80"></span>
+                <span class="h-2.5 w-2.5 rounded-full bg-amber-500/80"></span>
+                <span class="h-2.5 w-2.5 rounded-full bg-emerald-500/80"></span>
+              </span>
+              <span class="ml-3 text-xs text-slate-400">PR&nbsp;#128 &nbsp;·&nbsp; Conversation &nbsp;·&nbsp; <span class="text-slate-500">deploy-rehearsal-bot</span></span>
+            </div>
+            <div class="max-h-[560px] overflow-y-auto px-5 py-4">
+              <div id="hero-comment" class="pr-comment"></div>
+            </div>
+          </div>
+          <p class="mt-3 text-center text-xs text-slate-500">↑ 실제 엔진 출력 기반 PR 코멘트 (verdict = BLOCK)</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       2. Positioning one-liner
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="border-b border-slate-900 bg-slate-900/40">
+    <div class="mx-auto max-w-4xl px-4 py-10 text-center sm:px-6">
+      <p class="text-lg text-slate-300 sm:text-xl">
+        Claude Code, Codex, Cursor가 만든 변경을 PR에서 다시 검사합니다.
+        <span class="text-white">생성은 빠르게, 배포는 안전하게.</span>
+      </p>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       3. Problem
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="border-b border-slate-900">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold sm:text-4xl">린트와 테스트가 통과해도, 배포는 여전히 터집니다</h2>
+        <p class="mt-5 text-lg text-slate-400">
+          실제 장애는 코드 스타일보다 runtime, config, cache, output 같은 <span class="text-slate-200">운영성 문제</span>에서 더 자주 납니다.
+          AI가 코드를 더 빨리 만들수록 이런 문제는 더 조용히 들어오고, 리뷰는 더 쉽게 놓칩니다.
+        </p>
+      </div>
+      <div class="mt-12 grid gap-4 md:grid-cols-3">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+          <div class="mb-3 text-brand-400">
+            <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3m0 3h.01M4.93 19h14.14c1.54 0 2.5-1.67 1.73-3L13.73 5a2 2 0 00-3.46 0L3.2 16c-.77 1.33.19 3 1.73 3z"/></svg>
+          </div>
+          <h3 class="font-semibold">전체 경고는 많고</h3>
+          <p class="mt-1 text-sm text-slate-400">이번 변경의 위험은 잘 안 보입니다.</p>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+          <div class="mb-3 text-brand-400">
+            <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.542-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88L3 3m18 18l-6.88-6.88"/></svg>
+          </div>
+          <h3 class="font-semibold">무시한 경고가</h3>
+          <p class="mt-1 text-sm text-slate-400">왜 숨겨졌는지 추적되지 않습니다.</p>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+          <div class="mb-3 text-brand-400">
+            <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </div>
+          <h3 class="font-semibold">막아야 할 문제를</h3>
+          <p class="mt-1 text-sm text-slate-400">PR에서 놓치기 쉽습니다.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       4. How it works
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section id="how" class="border-b border-slate-900 bg-slate-900/30">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold sm:text-4xl">처음 PR 하나만 열면, 바로 이해됩니다</h2>
+        <p class="mt-5 text-lg text-slate-400">복잡한 대시보드 없이, GitHub PR 안에서 바로 끝납니다.</p>
+      </div>
+      <div class="mt-14 grid gap-6 md:grid-cols-3">
+        <!-- Step 1 -->
+        <div class="relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 p-6">
+          <span class="absolute right-4 top-4 text-5xl font-bold text-slate-800">01</span>
+          <div class="mb-4 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500/15 text-brand-400">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12M8 7a2 2 0 11-4 0 2 2 0 014 0zm0 10h12m-12 0a2 2 0 11-4 0 2 2 0 014 0zm6-5h6m-6 0a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+          </div>
+          <h3 class="mt-2 text-lg font-semibold">PR을 엽니다</h3>
+          <p class="mt-2 text-sm text-slate-400">기존 기준선과 현재 변경을 비교할 준비를 합니다.</p>
+          <div class="mt-5 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-400">
+            <div class="flex items-center justify-between">
+              <span>feat/billing-refactor → main</span>
+              <span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-400">queued</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 p-6">
+          <span class="absolute right-4 top-4 text-5xl font-bold text-slate-800">02</span>
+          <div class="mb-4 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500/15 text-brand-400">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          </div>
+          <h3 class="mt-2 text-lg font-semibold">Action이 배포 리허설을 실행합니다</h3>
+          <p class="mt-2 text-sm text-slate-400">이번 변경으로 새로 생긴 위험, suppress 상태, 예외 사유를 계산합니다.</p>
+          <div class="mt-5 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 font-mono text-[11px] text-slate-400">
+            <div>baseRef=origin/main mode=merge-base</div>
+            <div class="mt-1 text-rose-400">⛔ BLOCK — score 266 (via score)</div>
+            <div class="text-slate-500">Updated PR comment 1234567890</div>
+          </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950 p-6">
+          <span class="absolute right-4 top-4 text-5xl font-bold text-slate-800">03</span>
+          <div class="mb-4 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500/15 text-brand-400">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+          </div>
+          <h3 class="mt-2 text-lg font-semibold">PR 코멘트가 갱신됩니다</h3>
+          <p class="mt-2 text-sm text-slate-400">팀은 머지 전에 무엇이 위험한지, 무엇이 숨겨졌는지 바로 읽을 수 있습니다.</p>
+          <div class="mt-5 rounded-md border border-rose-500/30 bg-rose-500/5 px-3 py-2 font-mono text-[11px] text-rose-300">
+            ⛔ BLOCK — 1 comment · updated on every push
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       5. Killer — the one PR comment (tabs)
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section id="comment" class="border-b border-slate-900">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold sm:text-4xl">이 코멘트 하나로, 지금 머지해도 되는지 판단합니다</h2>
+        <p class="mt-5 text-lg text-slate-400">
+          결과는 PR 안에서 바로 읽힙니다. Verdict, change verdict, score, findings, suppress 상태까지 한 번에 확인할 수 있습니다.
+        </p>
+        <p class="mt-4 font-mono text-sm text-slate-300">
+          <code class="rounded bg-slate-900 px-2 py-1 text-brand-400">use client</code> 와
+          <code class="rounded bg-slate-900 px-2 py-1 text-brand-400">use server</code> 가 한 파일에 섞인 순간,
+          무시되는 <code class="rounded bg-slate-900 px-2 py-1 text-brand-400">revalidate</code>,
+          빠진 <code class="rounded bg-slate-900 px-2 py-1 text-brand-400">standalone</code> 출력까지 PR에서 바로 드러납니다.
+        </p>
+      </div>
+
+      <div class="mt-10 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+        <!-- Tab bar -->
+        <div class="flex items-center gap-1 border-b border-slate-800 bg-slate-950 px-3 py-2" role="tablist">
+          <button data-tab="block" class="tab-btn inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold text-rose-300 transition">
+            <span class="h-2 w-2 rounded-full bg-rose-400"></span> BLOCK
+          </button>
+          <button data-tab="caution" class="tab-btn inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold text-amber-300 transition">
+            <span class="h-2 w-2 rounded-full bg-amber-400"></span> CAUTION
+          </button>
+          <button data-tab="go" class="tab-btn inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold text-emerald-300 transition">
+            <span class="h-2 w-2 rounded-full bg-emerald-400"></span> GO
+          </button>
+          <span class="ml-auto hidden text-xs text-slate-500 sm:inline">같은 도구 · 다른 verdict · 같은 형식</span>
+        </div>
+        <div class="max-h-[680px] overflow-y-auto px-6 py-5">
+          <div id="tab-panel" class="pr-comment"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       6. Differentiators
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="border-b border-slate-900 bg-slate-900/30">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold sm:text-4xl">정적 분석기를 하나 더 추가한 게 아닙니다</h2>
+      </div>
+      <div class="mt-12 grid gap-6 md:grid-cols-2">
+        <div class="rounded-xl border border-slate-800 bg-slate-950 p-7">
+          <div class="mb-3 text-sm font-semibold text-brand-400">차별점 1</div>
+          <h3 class="text-lg font-semibold">전체 경고가 아니라 이번 변경의 위험을 봅니다</h3>
+          <p class="mt-2 text-sm text-slate-400">리포지토리 전체 노이즈보다, 지금 PR 때문에 새로 생긴 위험을 먼저 드러냅니다.</p>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-950 p-7">
+          <div class="mb-3 text-sm font-semibold text-brand-400">차별점 2</div>
+          <h3 class="text-lg font-semibold">Next.js가 특히 잘 틀리는 지점을 노립니다</h3>
+          <p class="mt-2 text-sm text-slate-400">Server Actions drift, ISR/revalidate 충돌, standalone output 누락처럼 배포 직전 중요한 실수에 집중합니다.</p>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-950 p-7">
+          <div class="mb-3 text-sm font-semibold text-brand-400">차별점 3</div>
+          <h3 class="text-lg font-semibold">숨긴 경고도 운영합니다</h3>
+          <p class="mt-2 text-sm text-slate-400">suppress를 그냥 묻어두지 않고, active, expired, invalid 상태와 예외 사유를 함께 다룹니다.</p>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-950 p-7">
+          <div class="mb-3 text-sm font-semibold text-brand-400">차별점 4</div>
+          <h3 class="text-lg font-semibold">PR에서 바로 읽히는 결과를 남깁니다</h3>
+          <p class="mt-2 text-sm text-slate-400">팀이 새로운 UI를 배우지 않아도, 기존 머지 흐름 안에서 바로 사용할 수 있습니다.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       7. Suppress operations
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="border-b border-slate-900">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="grid items-start gap-12 lg:grid-cols-5">
+        <div class="lg:col-span-2">
+          <h2 class="text-3xl font-bold sm:text-4xl">경고를 숨기는 게 아니라, 예외를 운영합니다</h2>
+          <p class="mt-5 text-base leading-relaxed text-slate-400">
+            같은 경고라도 왜 숨겨졌는지, 언제까지 허용되는지, 지금도 유효한지까지 함께 봐야 팀이 안심하고 머지할 수 있습니다.
+            Next.js처럼 배포 실수가 치명적인 영역일수록 더 그렇습니다.
+          </p>
+          <p class="mt-4 text-sm text-slate-500">
+            active, expired, invalid 상태를 분리하고, 어떤 규칙이 적용됐는지 추적 가능한 형태로 다룹니다.
+          </p>
+        </div>
+        <div class="lg:col-span-3">
+          <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+            <div class="border-b border-slate-800 bg-slate-950 px-4 py-2.5 text-xs text-slate-500">
+              <span class="font-mono">## Suppression status</span> · PR 코멘트 내 발췌
+            </div>
+            <div class="p-6">
+              <h4 class="mb-3 text-sm font-semibold text-emerald-300">Active (4)</h4>
+              <ul class="space-y-2 text-sm text-slate-300">
+                <li><code class="rounded bg-slate-950 px-1.5 py-0.5 text-xs text-brand-400">nextjs:middleware-unprotected:/legacy-admin</code> <span class="text-slate-500">(until 2026-05-15)</span> — Legacy route pending removal, INGEST-98</li>
+                <li><code class="rounded bg-slate-950 px-1.5 py-0.5 text-xs text-brand-400">prisma:drop-table:LegacyTable</code> <span class="text-slate-500">(until 2026-06-01)</span> — Table sunset plan landed in INGEST-142</li>
+                <li><code class="rounded bg-slate-950 px-1.5 py-0.5 text-xs text-brand-400">env:missing:GOOGLE_CLIENT_SECRET</code> <span class="text-slate-500">(indefinite)</span> — Set in Vercel secret manager</li>
+              </ul>
+              <h4 class="mt-5 mb-3 text-sm font-semibold text-amber-300">Expired (1)</h4>
+              <ul class="space-y-2 text-sm text-slate-300">
+                <li><code class="rounded bg-slate-950 px-1.5 py-0.5 text-xs text-brand-400">nextjs:matcher-shrunk:/admin/:path*</code> <span class="text-slate-500">(expired 2026-03-01)</span> — "Temporary during admin refactor"</li>
+              </ul>
+              <h4 class="mt-5 mb-3 text-sm font-semibold text-rose-300">Invalid (1)</h4>
+              <ul class="space-y-2 text-sm text-slate-300">
+                <li><code class="rounded bg-slate-950 px-1.5 py-0.5 text-xs text-brand-400">preflight:ci-config</code> — invalid-date — detail: <code class="rounded bg-slate-950 px-1.5 py-0.5 text-xs">2026-13-99</code></li>
+              </ul>
+              <p class="mt-5 border-t border-slate-800 pt-4 text-xs italic text-slate-500">
+                Suppressed 6 finding(s) via config (rules: 5, ignorePatterns: 1).
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       8. Rules in the wild
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section id="rules" class="border-b border-slate-900 bg-slate-900/30">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold sm:text-4xl">이런 문제를 PR에서 먼저 잡습니다</h2>
+      </div>
+      <div class="mt-12 grid gap-6 md:grid-cols-3">
+        <div class="rounded-xl border border-rose-500/30 bg-rose-500/5 p-6">
+          <div class="mb-3 inline-flex items-center gap-2 rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300">
+            <span class="h-1.5 w-1.5 rounded-full bg-rose-400"></span> HARD BLOCKER
+          </div>
+          <h3 class="text-lg font-semibold">Server Actions drift</h3>
+          <p class="mt-2 text-sm text-slate-400">클라이언트 모듈 안에 서버 액션이 섞이면, <span class="text-white">빌드 전에 바로 잡습니다.</span></p>
+          <pre class="mt-4 overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-400"><code>"use client";
+
+export async function resetPassword(fd) {
+  "use server"; // ← never works
+  ...
+}</code></pre>
+        </div>
+        <div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6">
+          <div class="mb-3 inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300">
+            <span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span> CAUTION
+          </div>
+          <h3 class="text-lg font-semibold">ISR / revalidate conflict</h3>
+          <p class="mt-2 text-sm text-slate-400">설정은 있어 보여도 <span class="text-white">실제로는 무시되는</span> 캐시 규칙을 경고합니다.</p>
+          <pre class="mt-4 overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-400"><code>export const dynamic = "force-dynamic";
+export const revalidate = 60; // ← ignored</code></pre>
+        </div>
+        <div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6">
+          <div class="mb-3 inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300">
+            <span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span> CAUTION
+          </div>
+          <h3 class="text-lg font-semibold">Standalone output missing</h3>
+          <p class="mt-2 text-sm text-slate-400">컨테이너가 뜬 뒤에야 드러나는 <span class="text-white">런타임 파일 누락</span>을 PR에서 먼저 보여줍니다.</p>
+          <pre class="mt-4 overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-400"><code>Dockerfile:
+COPY --from=builder /app/.next/standalone ./
+
+next.config.js:
+// output: 'standalone' ← missing</code></pre>
+        </div>
+      </div>
+      <p class="mx-auto mt-10 max-w-3xl text-center text-base text-slate-400">
+        로컬에서는 지나가고, 배포에서만 터지는 문제를 <span class="text-white">머지 전에 드러내는 것</span>이 이 도구의 핵심입니다.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       9. Target audience
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="border-b border-slate-900">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold sm:text-4xl">이런 팀에 특히 잘 맞습니다</h2>
+      </div>
+      <div class="mt-12 grid gap-6 md:grid-cols-3">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+          <div class="text-3xl">👤</div>
+          <h3 class="mt-3 font-semibold">AI로 빠르게 제품 만드는 1인 개발자</h3>
+          <p class="mt-2 text-sm text-slate-400">빠르게 만드는 대신, 배포 직전 한 번 더 안전장치를 걸고 싶은 경우.</p>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+          <div class="text-3xl">🧩</div>
+          <h3 class="mt-3 font-semibold">납기 압박이 큰 외주·에이전시</h3>
+          <p class="mt-2 text-sm text-slate-400">리뷰 시간은 짧고, 배포 실수 비용은 큰 팀.</p>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+          <div class="text-3xl">🚀</div>
+          <h3 class="mt-3 font-semibold">Next.js 기반으로 자주 배포하는 초기 스타트업</h3>
+          <p class="mt-2 text-sm text-slate-400">PR이 자주 열리고, 운영성 문제가 제품 신뢰도에 바로 영향을 주는 팀.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       10. 5-minute start
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section id="start" class="border-b border-slate-900 bg-slate-900/30">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold sm:text-4xl">GitHub Action으로 5분 안에 시작하기</h2>
+        <p class="mt-5 text-lg text-slate-400">
+          예제 워크플로를 복붙하고 PR 하나만 열어보세요.
+          <span class="text-white">Server Actions 혼선, 캐시 충돌, standalone 누락</span> 같은 Next.js 실수가 실제 코멘트로 바로 뜹니다.
+        </p>
+      </div>
+
+      <div class="mt-12 grid items-start gap-8 lg:grid-cols-5">
+        <div class="space-y-4 lg:col-span-2">
+          <div class="flex gap-4 rounded-xl border border-slate-800 bg-slate-950 p-5">
+            <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/15 font-semibold text-brand-400">1</span>
+            <div>
+              <h3 class="font-semibold">Action 추가</h3>
+              <p class="mt-1 text-sm text-slate-400">워크플로에 액션을 붙입니다.</p>
+            </div>
+          </div>
+          <div class="flex gap-4 rounded-xl border border-slate-800 bg-slate-950 p-5">
+            <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/15 font-semibold text-brand-400">2</span>
+            <div>
+              <h3 class="font-semibold">config 설정</h3>
+              <p class="mt-1 text-sm text-slate-400">필요한 기준과 옵션을 지정합니다.</p>
+            </div>
+          </div>
+          <div class="flex gap-4 rounded-xl border border-slate-800 bg-slate-950 p-5">
+            <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/15 font-semibold text-brand-400">3</span>
+            <div>
+              <h3 class="font-semibold">PR 열기</h3>
+              <p class="mt-1 text-sm text-slate-400">verdict, score, PR 코멘트가 자동으로 생성됩니다.</p>
+            </div>
+          </div>
+          <p class="pt-2 text-sm text-slate-500">복잡한 대시보드 없이, CI와 PR 안에서 바로 동작합니다.</p>
+        </div>
+
+        <div class="lg:col-span-3">
+          <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-950 shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-4 py-2">
+              <span class="font-mono text-xs text-slate-400">.github/workflows/deploy-rehearsal.yml</span>
+              <button id="copy-yaml" class="rounded border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300 transition hover:border-slate-600 hover:text-white">
+                Copy
+              </button>
+            </div>
+<pre id="yaml" class="overflow-x-auto p-5 font-mono text-[13px] leading-relaxed text-slate-300"><code><span class="text-slate-500">name</span>: Deploy Rehearsal
+<span class="text-slate-500">on</span>:
+  <span class="text-slate-500">pull_request</span>:
+    <span class="text-slate-500">types</span>: [opened, synchronize, reopened]
+
+<span class="text-slate-500">permissions</span>:
+  <span class="text-slate-500">contents</span>: read
+  <span class="text-slate-500">pull-requests</span>: write
+
+<span class="text-slate-500">jobs</span>:
+  <span class="text-slate-500">rehearse</span>:
+    <span class="text-slate-500">runs-on</span>: ubuntu-latest
+    <span class="text-slate-500">steps</span>:
+      - <span class="text-slate-500">uses</span>: actions/checkout@v4
+        <span class="text-slate-500">with</span>:
+          <span class="text-slate-500">fetch-depth</span>: 0  <span class="text-slate-500"># baseline 비교에 history 필요</span>
+      - <span class="text-slate-500">uses</span>: <span class="text-brand-400">amu-create/deploy-rehearsal-mcp/action@v1</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       11. Pricing
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section id="pricing" class="border-b border-slate-900">
+    <div class="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-3xl text-center">
+        <h2 class="text-3xl font-bold sm:text-4xl">혼자 시작하고, 팀으로 확장하세요</h2>
+      </div>
+      <div class="mt-14 grid gap-6 md:grid-cols-3">
+        <!-- Starter -->
+        <div class="flex flex-col rounded-xl border border-slate-800 bg-slate-900/60 p-7">
+          <div class="text-sm font-semibold text-slate-400">Starter</div>
+          <div class="mt-2"><span class="text-4xl font-bold">$19</span><span class="text-slate-500"> / month</span></div>
+          <p class="mt-3 text-sm text-slate-300">혼자 쓰는 배포 안전장치</p>
+          <p class="mt-1 text-xs text-slate-500">개인 프로젝트, 로컬 실행, 기본 리포트 중심.</p>
+          <ul class="mt-5 flex-1 space-y-2 text-sm text-slate-400">
+            <li>✓ 로컬 CLI / stdio MCP</li>
+            <li>✓ 기본 리포트</li>
+            <li>✓ 단일 개발자 사용</li>
+          </ul>
+          <p class="mt-6 rounded-md bg-slate-950 p-3 text-center text-xs text-slate-400">배포 사고 한 번만 막아도 본전입니다.</p>
+        </div>
+        <!-- Team -->
+        <div class="relative flex flex-col rounded-xl border-2 border-brand-500 bg-slate-900 p-7 shadow-xl shadow-brand-500/10">
+          <span class="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand-500 px-3 py-1 text-xs font-semibold text-white">Most popular</span>
+          <div class="text-sm font-semibold text-brand-400">Team</div>
+          <div class="mt-2"><span class="text-4xl font-bold">$99</span><span class="text-slate-500"> / month</span></div>
+          <p class="mt-3 text-sm text-slate-200">PR 흐름에 바로 붙는 팀용 플랜</p>
+          <p class="mt-1 text-xs text-slate-500">GitHub Action, PR 코멘트, 여러 repo.</p>
+          <ul class="mt-5 flex-1 space-y-2 text-sm text-slate-300">
+            <li>✓ GitHub Action + PR 코멘트</li>
+            <li>✓ baseline git-ref 모드</li>
+            <li>✓ suppression status 대시보드</li>
+            <li>✓ 여러 repo</li>
+          </ul>
+          <p class="mt-6 rounded-md bg-slate-950 p-3 text-center text-xs text-brand-300">팀 머지 흐름에 바로 들어가는 안전 레이어입니다.</p>
+        </div>
+        <!-- Pro -->
+        <div class="flex flex-col rounded-xl border border-slate-800 bg-slate-900/60 p-7">
+          <div class="text-sm font-semibold text-slate-400">Pro</div>
+          <div class="mt-2"><span class="text-4xl font-bold">$299</span><span class="text-slate-500"> / month</span></div>
+          <p class="mt-3 text-sm text-slate-300">예외 규칙까지 운영하는 배포 게이트</p>
+          <p class="mt-1 text-xs text-slate-500">owner, ticket, 만료 알림, 고급 운영 기능.</p>
+          <ul class="mt-5 flex-1 space-y-2 text-sm text-slate-400">
+            <li>✓ Team 전체 포함</li>
+            <li>✓ suppression owner / ticket 메타</li>
+            <li>✓ 만료 임박 알림</li>
+            <li>✓ 조직 정책 / 감사 로그</li>
+            <li>✓ 우선 지원</li>
+          </ul>
+          <p class="mt-6 rounded-md bg-slate-950 p-3 text-center text-xs text-slate-400">경고를 숨기는 게 아니라, 예외까지 운영 자산으로 만듭니다.</p>
+        </div>
+      </div>
+      <p class="mx-auto mt-10 max-w-3xl text-center text-sm text-slate-500">
+        혼자 쓸 때는 가볍게 시작하고, 팀이 커질수록 운영 기능을 붙이는 구조로 설계했습니다.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       12. FAQ
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="border-b border-slate-900 bg-slate-900/30">
+    <div class="mx-auto max-w-3xl px-4 py-20 sm:px-6">
+      <h2 class="text-center text-3xl font-bold sm:text-4xl">자주 묻는 질문</h2>
+      <div class="mt-12 space-y-4">
+        <details class="group rounded-xl border border-slate-800 bg-slate-950 open:border-slate-700">
+          <summary class="flex cursor-pointer items-center justify-between px-6 py-4 text-base font-semibold">
+            <span>ESLint나 테스트와 뭐가 다른가요?</span>
+            <span class="text-slate-500 transition group-open:rotate-180">▾</span>
+          </summary>
+          <p class="border-t border-slate-800 px-6 py-5 text-sm leading-relaxed text-slate-400">
+            이 도구는 코드 스타일이나 일반 오류보다, 실제 배포를 망가뜨릴 가능성이 큰 변경을 PR 기준으로 다시 봅니다.
+            전체 경고를 늘리는 게 아니라, 이번 변경의 위험을 줄이는 데 집중합니다.
+          </p>
+        </details>
+        <details class="group rounded-xl border border-slate-800 bg-slate-950 open:border-slate-700">
+          <summary class="flex cursor-pointer items-center justify-between px-6 py-4 text-base font-semibold">
+            <span>왜 Next.js에 특히 강한가요?</span>
+            <span class="text-slate-500 transition group-open:rotate-180">▾</span>
+          </summary>
+          <p class="border-t border-slate-800 px-6 py-5 text-sm leading-relaxed text-slate-400">
+            초기엔 Next.js/Vercel에서 자주 터지는 운영성 문제를 우선 겨냥했습니다.
+            Server Actions, revalidate, standalone output처럼 배포 관점에서 중요한 실수를 바로 데모 가능한 형태로 잡아냅니다.
+          </p>
+        </details>
+        <details class="group rounded-xl border border-slate-800 bg-slate-950 open:border-slate-700">
+          <summary class="flex cursor-pointer items-center justify-between px-6 py-4 text-base font-semibold">
+            <span>suppress를 왜 따로 강조하나요?</span>
+            <span class="text-slate-500 transition group-open:rotate-180">▾</span>
+          </summary>
+          <p class="border-t border-slate-800 px-6 py-5 text-sm leading-relaxed text-slate-400">
+            실무에서는 경고를 아예 없애기보다 예외를 관리해야 하는 경우가 많습니다.
+            그래서 active, expired, invalid 상태와 적용 이유를 함께 보여주는 방향으로 설계했습니다.
+          </p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       13. Final CTA
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="relative overflow-hidden">
+    <div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-brand-500/15 via-transparent to-transparent"></div>
+    <div class="relative mx-auto max-w-4xl px-4 py-24 text-center sm:px-6">
+      <h2 class="text-3xl font-bold sm:text-4xl">
+        첫 PR에서 바로,<br />
+        <span class="text-brand-400">새로 생긴 배포 위험</span>을 확인하세요
+      </h2>
+      <p class="mx-auto mt-6 max-w-2xl text-lg text-slate-400">
+        AI가 더 빨리 코드를 만들수록, 머지 직전 검역은 더 중요해집니다.
+        지금 Action을 붙이고 팀의 배포 체크포인트를 만드세요.
+      </p>
+      <div class="mt-10 flex flex-col justify-center gap-3 sm:flex-row">
+        <a href="#start" class="inline-flex items-center justify-center rounded-md bg-brand-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 hover:bg-brand-400">
+          GitHub Action으로 시작하기
+        </a>
+        <a href="#comment" class="inline-flex items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 px-6 py-3 text-sm font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-900">
+          PR 코멘트 예시 보기
+        </a>
+      </div>
+      <p class="mt-10 text-sm italic text-slate-500">생성은 더 빨라졌습니다. 이제 배포도 더 안전해져야 합니다.</p>
+    </div>
+  </section>
+
+  <footer class="border-t border-slate-900">
+    <div class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-4 py-8 text-xs text-slate-500 sm:flex-row sm:px-6">
+      <span>Deploy Rehearsal · PR 안전장치</span>
+      <span>static validation landing · assets generated from real engine output</span>
+    </div>
+  </footer>
+
+  <!-- ═════════════════════════════════════════════════════════════════════
+       Markdown content (inlined from docs/landing-assets/comment-*.md).
+       Regenerate: node scripts/render-demo-comments.mjs  then resync here.
+  ═════════════════════════════════════════════════════════════════════ -->
+  <script id="md-block" type="text/markdown">
+&gt; **Scenario:** A PR that introduces a `DROP TABLE` migration plus an uncommitted `sk_live_…` token. The hard-blocker rule fires before the score threshold even matters.
+
+⛔ **BLOCK** — score 266 _(via score)_
+**Change verdict:** BLOCK _(delta-score)_
+**Compared against:** `HEAD` @ `3de704519a` _(mode: direct)_
+
+# Deploy Rehearsal — ⛔ BLOCK
+
+**Score:** 266 (caution ≥ 25, block ≥ 60) — verdict via `score`
+**Branch:** `master`
+**Diff:** 1 file(s), +2 / -0
+**Config:** `deploy-rehearsal.config.json`
+
+## Hard blockers (0)
+_None — verdict driven by score, not rule._
+
+## Blockers (6)
+- **[auth]** Auth-related file changed. Test login, logout, and token refresh. — `src/auth/callback.ts`
+  - _Fix:_ Run login, logout, token refresh, and session expiry paths in staging before shipping.
+- **[env]** Env key `GOOGLE_CLIENT_SECRET` missing in: .env.production
+  - _Fix:_ Add GOOGLE_CLIENT_SECRET to the missing file(s), or document the intentional gap in .env.example.
+- **[env]** Env key `NEXTAUTH_SECRET` empty in: .env.production
+  - _Fix:_ Set a value for NEXTAUTH_SECRET before deploy. Empty secrets crash auth/payment at runtime.
+- **[env]** Required env key `DOES_NOT_EXIST_ANYWHERE` not defined in any env file.
+  - _Fix:_ Add DOES_NOT_EXIST_ANYWHERE to every deploy target before shipping.
+- **[oauth]** Plain http:// OAuth redirect: http://old-staging.example.com/cb — `src/auth/callback.ts:11`
+  - _Fix:_ Switch to https:// — many OAuth providers reject plain http for non-localhost.
+- **[secret]** Diff adds 1 match(es) for blocked pattern /sk_live_[A-Za-z0-9]+/
+  - _Fix:_ Remove the secret from the diff and rotate the key if it was pushed anywhere.
+
+## Warnings (9)
+- **[env]** Env key `DEBUG` missing in: .env.production
+- **[env]** Env key `SENTRY_DSN` missing in: .env.development
+- **[env]** Env key `DEBUG` empty in: .env.development
+- **[env]** Env key `STRIPE_SECRET_KEY` has different values across env files
+- **[oauth]** Localhost OAuth redirect in non-test file: http://localhost:3000 — `.env.development:2`
+- **[oauth]** Localhost OAuth redirect in non-test file: http://localhost:3000/api/auth/callback/google — `src/auth/callback.ts:3`
+- **[oauth]** OAuth redirect to off-allowlist domain: old-staging.example.com — `src/auth/callback.ts:11`
+- **[preflight]** 1 uncommitted file(s). Commit before deploy.
+- **[preflight]** `.env` exists but no `.env.example` to document required vars.
+
+## Sections
+- **Preflight:** 5 pass, 3 warn, 0 fail
+- **Env:** 3 missing, 2 empty, 4 divergent (across 2 file[s])
+- **OAuth:** 5 redirect(s), 1 plain-http, 2 localhost in non-test, 1 off-allowlist
+- **Diff signals:** 1 high / 0 warn / 0 info
+
+_Suppressed 1 finding(s) via config (rules: 1, ignorePatterns: 0)._
+
+## Suppression status
+
+### Active (1)
+- `preflight:ci-config` (indefinite)
+
+### Expired (0)
+_None._
+
+### Invalid (0)
+_None._
+
+## Changes since baseline
+**Compared against** `HEAD` (resolved `3de704519a`, mode=`direct`).
+**Baseline:** `git-ref:HEAD@3de704519a…` — score 166 (BLOCK), 13 finding(s). Compared by `fingerprint`.
+**Delta:** +100 → change verdict `BLOCK`.
+
+### New (5)
+- **[high/auth]** Auth-related file changed. _(diff:auth:src/auth/callback.ts)_
+- **[high/secret]** Diff adds 1 match(es) for blocked pattern _(secret:blocked:sk_live_…)_
+- **[warn/oauth]** Localhost OAuth redirect in `.env.development`
+- **[warn/preflight]** 1 uncommitted file(s).
+- **[warn/preflight]** `.env` exists but no `.env.example`.
+
+### Resolved (0)
+_None._
+  </script>
+
+  <script id="md-caution" type="text/markdown">
+&gt; **Scenario:** Same PR as BLOCK, but the team has already tagged the obvious hard-blockers with explicit `suppress` rules — each with a `reason` and an `until` date. Remaining risk is still real, just softer.
+
+⚠️ **CAUTION** — score 56 _(via score)_
+**Change verdict:** CAUTION _(delta-score)_
+**Compared against:** `HEAD` @ `3de704519a` _(mode: direct)_
+
+# Deploy Rehearsal — ⚠️ CAUTION
+
+**Score:** 56 (caution ≥ 25, block ≥ 60) — verdict via `score`
+**Branch:** `master`
+**Diff:** 1 file(s), +2 / -0
+**Config:** `deploy-rehearsal.demo-caution.json`
+
+## Hard blockers (0)
+_None — verdict driven by score, not rule._
+
+## Blockers (0)
+_None._
+
+## Warnings (5)
+- **[env]** Env key `STRIPE_SECRET_KEY` has different values across env files
+- **[oauth]** Localhost OAuth redirect in non-test file: http://localhost:3000 — `.env.development:2`
+- **[oauth]** Localhost OAuth redirect in non-test file: http://localhost:3000/api/auth/callback/google — `src/auth/callback.ts:3`
+- **[preflight]** 1 uncommitted file(s). Commit before deploy.
+- **[preflight]** `.env` exists but no `.env.example` to document required vars.
+
+## Sections
+- **Preflight:** 5 pass, 3 warn, 0 fail
+- **Env:** 3 missing, 2 empty, 4 divergent (across 2 file[s])
+- **OAuth:** 5 redirect(s), 1 plain-http, 2 localhost in non-test, 1 off-allowlist
+
+_Suppressed 11 finding(s) via config (rules: 11, ignorePatterns: 0)._
+
+## Suppression status
+
+### Active (11)
+- `preflight:ci-config` (indefinite)
+- `secret:blocked:sk_live_[A-Za-z0-9]+` (until 2099-01-01) — Test token used during a fire-drill — already rotated.
+- `env:empty:NEXTAUTH_SECRET` (until 2099-01-01) — Set in Vercel secret manager.
+- `env:missing:GOOGLE_CLIENT_SECRET` (until 2099-01-01) — Set in secret manager for prod.
+- `env:required:DOES_NOT_EXIST_ANYWHERE` (until 2099-01-01) — Stubbed until INGEST-142 lands.
+- `diff:auth:src/auth/callback.ts` (until 2099-01-01) — Intentional: OAuth cleanup epic. Re-review in PR.
+- `oauth:http:http://old-staging.example.com/cb` (until 2099-01-01) — Legacy redirect, removed in INGEST-143.
+- `oauth:unexpected:old-staging.example.com` (until 2099-01-01) — Same legacy redirect.
+- `env:missing:DEBUG` (until 2099-01-01) — DEBUG is dev-only.
+- `env:empty:DEBUG` (until 2099-01-01) — Empty DEBUG in dev intentional.
+- `env:missing:SENTRY_DSN` (until 2099-01-01) — Sentry is prod-only.
+
+### Expired (0)
+_None._
+
+### Invalid (0)
+_None._
+
+## Changes since baseline
+**Compared against** `HEAD` (resolved `3de704519a`, mode=`direct`).
+**Baseline:** `git-ref:HEAD@3de704519a…` — score 26 (CAUTION), 5 finding(s). Compared by `fingerprint`.
+**Delta:** +30 → change verdict `CAUTION`.
+
+### New (3)
+- **[warn/oauth]** Localhost OAuth redirect in `.env.development`
+- **[warn/preflight]** 1 uncommitted file(s).
+- **[warn/preflight]** `.env` exists but no `.env.example`.
+
+### Resolved (0)
+_None._
+  </script>
+
+  <script id="md-go" type="text/markdown">
+&gt; **Scenario:** A small, well-structured PR — nothing destructive, no env drift, no Next.js / Prisma risks. This is what a healthy change looks like.
+
+✅ **GO** — score 0 _(via clean)_
+**Change verdict:** GO _(clean)_
+**Compared against:** `HEAD` @ `38473e2139` _(mode: direct)_
+
+# Deploy Rehearsal — ✅ GO
+
+**Score:** 0 (caution ≥ 25, block ≥ 90) — verdict via `clean`
+**Branch:** `master`
+**Diff:** 0 file(s), +0 / -0
+**Config:** `deploy-rehearsal.config.json`
+
+## Hard blockers (0)
+_None — verdict driven by score, not rule._
+
+## Blockers (0)
+_None._
+
+## Warnings (0)
+_None._
+
+## Sections
+- **Preflight:** 8 pass, 0 warn, 0 fail
+- **Env:** skipped (no env files supplied)
+- **OAuth:** 0 redirect(s), 0 plain-http, 0 localhost in non-test, 0 off-allowlist
+- **Diff signals:** 0 high / 0 warn / 0 info
+
+## Changes since baseline
+**Compared against** `HEAD` (resolved `38473e2139`, mode=`direct`).
+**Baseline:** `git-ref:HEAD@38473e2139…` — score 0 (GO), 0 finding(s).
+**Delta:** +0 → change verdict `GO`.
+
+### New (0)
+_None._
+
+### Resolved (0)
+_None._
+  </script>
+
+  <!-- App script -->
+  <script>
+    const md = {
+      block:   document.getElementById('md-block').textContent.trim(),
+      caution: document.getElementById('md-caution').textContent.trim(),
+      go:      document.getElementById('md-go').textContent.trim(),
+    };
+
+    // Un-escape the leading "&gt;" we used to keep the browser from eating the "blockquote >" prefix.
+    function unescape(s) { return s.replace(/^&gt;/gm, '>'); }
+
+    // Hero: always BLOCK
+    document.getElementById('hero-comment').innerHTML = marked.parse(unescape(md.block));
+
+    // Killer section tabs
+    const panel = document.getElementById('tab-panel');
+    const buttons = Array.from(document.querySelectorAll('.tab-btn'));
+    function activate(which) {
+      panel.innerHTML = marked.parse(unescape(md[which]));
+      buttons.forEach((b) => {
+        const isActive = b.dataset.tab === which;
+        b.classList.toggle('bg-slate-900', isActive);
+        b.classList.toggle('ring-1', isActive);
+        b.classList.toggle('ring-slate-700', isActive);
+      });
+    }
+    buttons.forEach((b) => b.addEventListener('click', () => activate(b.dataset.tab)));
+    activate('block');
+
+    // Copy YAML button
+    document.getElementById('copy-yaml').addEventListener('click', () => {
+      const text = document.getElementById('yaml').innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('copy-yaml');
+        const prev = btn.textContent;
+        btn.textContent = 'Copied ✓';
+        btn.classList.add('text-emerald-400', 'border-emerald-500/40');
+        setTimeout(() => {
+          btn.textContent = prev;
+          btn.classList.remove('text-emerald-400', 'border-emerald-500/40');
+        }, 1400);
+      });
+    });
+  </script>
+</body>
+</html>

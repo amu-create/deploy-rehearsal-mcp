@@ -1,0 +1,28 @@
+# Copy this file into your repo as `.github/workflows/deploy-rehearsal.yml`.
+# Keeps things minimal: every PR push runs the rehearsal and updates one comment.
+
+name: Deploy Rehearsal
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # baseline 비교에 git history 가 필요합니다
+
+      - uses: amu-create/deploy-rehearsal-mcp/action@v1
+        # 모든 입력 옵션 — 기본값으로 충분합니다.
+        # with:
+        #   working-directory: .
+        #   base-ref: ''               # 빈 값 → PR base 브랜치 자동 사용
+        #   mode: merge-base           # 또는 direct
+        #   fail-on-block: 'true'
+        #   comment: 'true'

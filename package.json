@@ -1,0 +1,33 @@
+{
+  "name": "deploy-rehearsal-mcp",
+  "version": "0.1.0",
+  "description": "Pre-deploy rehearsal MCP server: analyzes git diff, env drift, OAuth redirects, and scores deployment risk before you ship.",
+  "type": "module",
+  "bin": {
+    "deploy-rehearsal-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./engine": "./dist/tools/runRehearsal.js"
+  },
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["mcp", "deploy", "preflight", "ci", "risk", "vibe-coding"],
+  "license": "MIT"
+}
