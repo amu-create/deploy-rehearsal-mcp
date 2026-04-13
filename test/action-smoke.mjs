@@ -36,6 +36,7 @@ function runAction({ failOnBlock }) {
     PATH: process.env.PATH,
     INPUT_WORKING_DIRECTORY: FIXTURE,
     BASE_REF: "HEAD",
+    HEAD_REF: "WORKING",
     MODE: "direct",
     FAIL_ON_BLOCK: failOnBlock ? "true" : "false",
     SHOULD_COMMENT: "false",

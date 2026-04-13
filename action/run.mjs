@@ -13,6 +13,7 @@ const cwd = env("INPUT_WORKING_DIRECTORY", ".") || ".";
 const explicitRef = env("BASE_REF");
 const defaultBase = env("DEFAULT_BASE_BRANCH");
 const baseRef = explicitRef || (defaultBase ? `origin/${defaultBase}` : "");
+const headRef = env("HEAD_REF", "HEAD") || "HEAD";
 const mode = env("MODE", "merge-base") || "merge-base";
 const failOnBlock = env("FAIL_ON_BLOCK", "true") !== "false";
 const shouldComment = env("SHOULD_COMMENT", "true") !== "false";
@@ -97,10 +98,10 @@ async function upsertPrComment(body) {
 }
 
 async function main() {
-  log(`baseRef=${baseRef || "(none)"} mode=${mode} cwd=${cwd}`);
+  log(`baseRef=${baseRef || "(none)"} headRef=${headRef} mode=${mode} cwd=${cwd}`);
   const result = await runRehearsal({
     cwd,
-    ...(baseRef ? { baselineRef: baseRef, baselineRefMode: mode } : {}),
+    ...(baseRef ? { baseRef, headRef, baselineRef: baseRef, baselineRefMode: mode } : {}),
     report: "markdown",
   });
 
